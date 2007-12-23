@@ -1,0 +1,21 @@
+TYPEMAP
+char *            T_PV
+const char *      T_PV
+FST *             T_FST
+INPUT
+T_FST
+	{
+	    if (sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG))
+	        $var = ($type)SvIV((SV*)SvRV($arg));
+	    else{
+	        warn(\"${Package}::$func_name() -- $var is not a blessed SV\");
+	        XSRETURN_UNDEF;
+	    }
+	}
+T_PV
+	$var = ($type)SvPV_nolen($arg)
+OUTPUT
+T_FST
+	sv_setref_pv($arg, "Algorithm::OpenFST::FST", (void*)$var);
+T_PV
+	sv_setpv((SV*)$arg, $var);

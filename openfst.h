@@ -1,0 +1,99 @@
+#ifndef _OPENFST_H
+#define _OPENFST_H
+
+#include <string>
+using namespace std;
+
+#define SMRLog 1
+#define SMRTropical 2
+// XXX: sync w/ project.h
+#define INPUT 1
+#define OUTPUT 2
+// XXX: sync w/ reweight.h
+#define INITIAL 0
+#define FINAL 1
+// XXX: sync w/ rational.h
+#define STAR 0
+#define PLUS 1
+// XXX: sync w/ encode.h
+#define ENCODE_LABEL 1
+#define ENCODE_WEIGHT 2
+// XXX: sync w/ properties.h
+#define ACCEPTOR 0x0000000000010000ULL
+#define NOT_ACCEPTOR 0x0000000000020000ULL
+
+/// Base class for Perl FSTs
+struct FST
+{
+
+    virtual FST * Copy() const = 0;
+    virtual ~FST() { }
+    // Combination
+    // XXX: why are only some destructive?
+    virtual FST * Compose(const FST * ) const = 0;
+    virtual FST * Intersect(const FST * ) const = 0;
+    // Destructive versions:
+    virtual void _Union(const FST * ) = 0;
+    virtual void _Concat(const FST * ) = 0;
+
+    // Transformation
+    virtual void _Closure(int ) = 0;
+    virtual void _Project(int ) = 0;
+    virtual void _Encode(int ) = 0;
+    virtual void _Decode(int ) = 0;
+
+    // Cleanup
+    // XXX: why only some destructive?
+    virtual FST * Determinize() const = 0;
+    virtual void _Prune(float) = 0;
+    virtual void _RmEpsilon() = 0;
+    virtual void _Minimize() = 0;
+    virtual FST * Minimize() const = 0;
+    virtual void _Push(int) = 0;
+
+    // Construction
+    virtual void AddState() = 0;
+    virtual void SetStart(int) = 0;
+    virtual void SetFinal(int, float = 0) = 0;
+    virtual void AddArc(int, int, float, int, int) = 0;
+
+    virtual void WriteBinary(const char * ) const = 0;
+    virtual void WriteText(const char *) const = 0;
+    virtual string String() const = 0;
+    virtual char * CString() const
+        { return strdup(String().c_str()); }
+    virtual int NumStates() const = 0;
+    virtual int NumArcs(unsigned) const = 0;
+    virtual unsigned Properties(bool ) const = 0;
+
+    // "Other" algorithms
+    virtual FST * ShortestPath(unsigned , int ) const = 0;
+};
+
+FST *
+ReadBinary(const char *, int);
+
+FST *
+ReadText(const char *, int, bool, const char * = NULL, const char * = NULL,
+         const char * = NULL);
+
+inline FST *
+Acceptor(const char * f, int smr, const char * sy = NULL,
+         const char * ssy = NULL)
+{
+    return ReadText(f, smr, true, sy, sy, ssy);
+}
+
+inline FST *
+Transducer(const char * f, int smr,
+           const char * is = NULL,
+           const char * os = NULL,
+           const char * ss = NULL)
+{
+    return ReadText(f, smr, false, is, os, ss);
+}
+
+FST *
+VectorFST(int );
+
+#endif // _OPENFST_H
