@@ -2,6 +2,16 @@
 #define _OPENFST_H
 
 #include <string>
+#include <vector>
+extern "C" {
+#include "EXTERN.h"
+#include "perl.h"
+#include "XSUB.h"
+
+#include "ppport.h"
+}
+#undef Copy
+#undef Zero
 using namespace std;
 
 #define SMRLog 1
@@ -27,11 +37,13 @@ struct FST
 {
 
     virtual FST * Copy() const = 0;
+    virtual FST * change_semiring(int ) const = 0;
+    virtual int semiring() const = 0;
     virtual ~FST() { }
     // Combination
     // XXX: why are only some destructive?
-    virtual FST * Compose(const FST * ) const = 0;
-    virtual FST * Intersect(const FST * ) const = 0;
+    virtual FST * Compose(FST * ) = 0;
+    virtual FST * Intersect(FST * ) = 0;
     // Destructive versions:
     virtual void _Union(const FST * ) = 0;
     virtual void _Concat(const FST * ) = 0;
@@ -54,20 +66,25 @@ struct FST
     // Construction
     virtual void AddState() = 0;
     virtual void SetStart(int) = 0;
+    virtual int Start() const = 0;
     virtual void SetFinal(int, float = 0) = 0;
+    virtual float Final(int) const = 0;
     virtual void AddArc(int, int, float, int, int) = 0;
 
     virtual void WriteBinary(const char * ) const = 0;
     virtual void WriteText(const char *) const = 0;
-    virtual string String() const = 0;
-    virtual char * CString() const
-        { return strdup(String().c_str()); }
+    virtual string _String() const = 0;
+    virtual string _Draw() const = 0;
+    virtual void strings(vector<string>& ) const = 0;
+    SV* String() const;
+    SV* Draw() const;
     virtual int NumStates() const = 0;
     virtual int NumArcs(unsigned) const = 0;
     virtual unsigned Properties(bool ) const = 0;
 
     // "Other" algorithms
     virtual FST * ShortestPath(unsigned , int ) const = 0;
+    virtual void normalize() = 0;
 };
 
 FST *

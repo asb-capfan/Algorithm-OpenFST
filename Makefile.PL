@@ -1,12 +1,14 @@
 use ExtUtils::MakeMaker qw(WriteMakefile prompt);
-use ExtUtils::Constant qw(WriteConstants);
 use Config;
 
+eval <<'EOS' if ($ENV{USER} eq 'seano');
+use ExtUtils::Constant qw(WriteConstants);
 WriteConstants(
     NAME => 'Algorithm::OpenFST',
     NAMES => [qw(INPUT OUTPUT INITIAL FINAL STAR PLUS SMRLog SMRTropical
                  ENCODE_LABEL ENCODE_WEIGHT ACCEPTOR NOT_ACCEPTOR)],
 );
+EOS
 
 $FST = prompt("OpenFST source directory: ",
               "$ENV{HOME}/research/external/openfst"

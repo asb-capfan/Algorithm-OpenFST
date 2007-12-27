@@ -107,10 +107,17 @@ void
 FST::SetStart(n)
 	int	n
 
+int
+FST::Start()
+
 void
 FST::SetFinal(n, w)
 	int	n
 	float	w
+
+float
+FST::Final(n)
+	int	n
 
 void
 FST::AddArc(a, b, w, i, o)
@@ -128,8 +135,11 @@ void
 FST::WriteText(file)
 	 char *	file
 
-char *
-FST::CString()
+SV *
+FST::String()
+
+SV *
+FST::Draw()
 
 int
 FST::NumStates()
@@ -143,6 +153,27 @@ FST::Properties(compute = 0)
 	int	compute
 
 FST *
-FST::ShortestPath(n = 1, uniq = 1)
+FST::ShortestPath(n = 1, uniq = 0)
 	unsigned	n
 	int	uniq
+
+void
+FST::normalize()
+
+FST *
+FST::change_semiring(smr)
+	int	smr
+
+int
+FST::semiring()
+
+void
+FST::strings()
+    PREINIT:
+      vector<string> tmp;
+    PPCODE:
+      THIS->strings(tmp);
+      EXTEND(SP, tmp.size());
+      for (int i = 0; i < tmp.size(); i++)
+          PUSHs(sv_2mortal(newSVpvn(tmp[i].c_str(), tmp[i].size())));
+      XSRETURN(tmp.size());

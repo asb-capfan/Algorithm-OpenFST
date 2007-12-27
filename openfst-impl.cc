@@ -1,9 +1,27 @@
 // All right, Mr. Google monkey.  Calling exit(1) in a library a bad
 // thing, m'kay?
-// #define exit(n) (((n) == 0) ? exit(0) : (throw exception("error"),1))
-#include "fst/lib/compat.h"
-// #undef exit
 
+#include <exception>
+#include <string>
+using namespace std;
+
+class fst_exception : public exception
+{
+    const string msg;
+public:
+    fst_exception(const string& _msg) throw ()
+	: msg(_msg) { }
+    ~fst_exception() throw ()
+	{ }
+    const char * what () const throw ()
+	{ return msg.c_str(); }
+};
+
+#define exit(n) (throw fst_exception((n) ? "ugh" : "ok"))
+#include "fst/lib/compat.h"
+#undef exit
+
+#include "fst/lib/arcsort.h"
 #include "fst/lib/closure.h"
 #include "fst/lib/compose.h"
 #include "fst/lib/concat.h"
@@ -21,6 +39,7 @@
 #include "fst/lib/symbol-table.h"
 #include "fst/lib/union.h"
 #include "fst/lib/vector-fst.h"
+#include "fst/bin/draw-main.h"
 #include <sstream>
 #include <fstream>
 using namespace std;
@@ -62,30 +81,14 @@ struct FSTImpl : public FST
             return ret;
         }
 
+    virtual int semiring() const;
+
+    virtual FST * change_semiring(int smr) const;
+    void copy_to(FST * fst) const;
     // Combination
     // XXX: why are only some destructive?
-    virtual FST * Compose(const FST * that) const
-        {
-            const FSTImpl * f = dynamic_cast<const FSTImpl<Arc>*>(that);
-            if (f) {
-                // XXX: stupid copy
-                FSTImpl<Arc> * ret = new FSTImpl<Arc>(*this);
-                fst::Compose(*(const Fst*)fst, *f->fst, ret->fst);
-                return ret;
-            }
-            return NULL;
-        }
-    virtual FST * Intersect(const FST * that) const
-        {
-            const FSTImpl * f = dynamic_cast<const FSTImpl<Arc>*>(that);
-            if (f) {
-                // XXX: stupid copy
-                FSTImpl<Arc> * ret = new FSTImpl<Arc>(*this);
-                fst::Intersect(*(const Fst*)fst, *f->fst, ret->fst);
-                return ret;
-            }
-            return NULL;
-        }
+    virtual FST * Compose(FST * that);
+    virtual FST * Intersect(FST * that);
     virtual void _Union(const FST * that)
         {
             const FSTImpl * f = dynamic_cast<const FSTImpl*>(that);
@@ -114,12 +117,9 @@ struct FSTImpl : public FST
     virtual FST * Determinize() const;
     virtual void _RmEpsilon()
         {
-            fst::RmEpsilon((Fst*)this);
+            fst::RmEpsilon(fst);
         }
-    virtual void _Minimize()
-        {
-            fst::Minimize((Fst*)this);
-        }
+    virtual void _Minimize();
     virtual FST * Minimize() const;
 
     virtual void _Prune(float w)
@@ -131,13 +131,18 @@ struct FSTImpl : public FST
         {
             Push(fst, (fst::ReweightType)type);
         }
+    virtual void normalize();
 
     virtual void AddState()
         { fst->AddState(); }
     virtual void SetStart(int i)
         { fst->SetStart(i); }
+    virtual int Start() const
+        { return fst->Start(); }
     virtual void SetFinal(int i, float w = 0)
         { fst->SetFinal(i, w); }
+    virtual float Final(int i) const
+        { return fst->Final(i).Value(); }
     virtual void AddArc(int from, int to, float w, int in, int out)
         { fst->AddArc(from, Arc(in, out, w, to)); }
 
@@ -152,13 +157,15 @@ struct FSTImpl : public FST
             FstPrinter<Arc>(*fst, NULL, NULL, NULL, false).Print(&os, file);
         }
 
-    virtual string String() const
+    virtual string _String() const
         {
             ostringstream os;
             FstPrinter<Arc>(*fst, NULL, NULL, NULL, false)
                 .Print(&os, "<string>");
             return os.str();
         }
+
+    virtual string _Draw() const;
 
     virtual int NumStates() const
         {
@@ -179,10 +186,122 @@ struct FSTImpl : public FST
     virtual FST * ShortestPath(unsigned n, int uniq) const
         {
             FSTImpl * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
-            fst::ShortestPath(*fst, ret->fst, n, uniq);
-            return ret;
+            try {
+                fst::ShortestPath(*fst, ret->fst, n, uniq);
+                return ret;
+            } catch (fst_exception e) {
+                cerr << e.what() << endl;
+                delete ret;
+                return NULL;
+            }
         }
+    void _strings(vector<string>& out, int st, const string& cur) const;
+    virtual void strings(vector<string>&) const;
 };
+
+template <>
+int
+FSTImpl<LogArc>::semiring() const
+{ return SMRLog; }
+
+template <>
+int
+FSTImpl<StdArc>::semiring() const
+{ return SMRTropical; }
+
+template <class Arc>
+void
+FSTImpl<Arc>::copy_to(FST * to) const
+{
+    typedef typename Arc::StateId StateId;
+    for (fst::StateIterator<fst::Fst<Arc> > it(*fst); !it.Done(); it.Next()) {
+        to->AddState();
+        if (fst->Final(it.Value()) != Arc::Weight::Zero())
+            to->SetFinal(it.Value(), fst->Final(it.Value()).Value());
+    }
+    to->SetStart(fst->Start());
+    for (fst::StateIterator<fst::Fst<Arc> > it(*fst); !it.Done(); it.Next()) {
+        StateId from(it.Value());
+        for (fst::ArcIterator<fst::Fst<Arc> > ai(*fst, from);
+             !ai.Done(); ai.Next()) {
+            Arc a(ai.Value());
+            to->AddArc(from, a.nextstate, a.weight.Value(),
+                       a.ilabel, a.olabel);
+        }
+    }
+}
+
+template <>
+FST *
+FSTImpl<StdArc>::change_semiring(int smr) const
+{
+    if (smr == SMRTropical)
+        return Copy();
+    FST * ret;
+    if (smr == SMRLog) {
+        ret = new FSTImpl<LogArc>(new VectorFst<LogArc>);
+    } else {
+        cerr << "Unknown semiring " << smr << endl;
+        return NULL;
+    }
+    copy_to(ret);
+    return ret;
+}
+
+template <>
+FST *
+FSTImpl<LogArc>::change_semiring(int smr) const
+{
+    if (smr == SMRLog)
+        return Copy();
+    FST * ret;
+    if (smr == SMRTropical) {
+        ret = new FSTImpl<StdArc>(new VectorFst<StdArc>);
+    } else {
+        cerr << "Unknown semiring " << smr << endl;
+        return NULL;
+    }
+    copy_to(ret);
+    return ret;
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Intersect(FST * that)
+{
+    const FSTImpl * f = dynamic_cast<const FSTImpl<Arc>*>(that);
+    if (f) {
+        // XXX: maybe encode and try again here?
+        if (!fst->Properties(kAcceptor, true))
+            return NULL;
+        if (!f->fst->Properties(kAcceptor, true))
+            return NULL;
+        // XXX: apparently intersect requires arc-sorting.
+        ArcSort(f->fst, ILabelCompare<Arc>());
+        ArcSort(fst, OLabelCompare<Arc>());
+        // XXX: stupid copy
+        FSTImpl<Arc> * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
+        fst::Intersect(*(const Fst*)fst, *f->fst, ret->fst);
+        return ret;
+    }
+    return NULL;
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Compose(FST * that)
+{
+    FSTImpl * f = dynamic_cast<FSTImpl<Arc>*>(that);
+    if (f) {
+        ArcSort(f->fst, ILabelCompare<Arc>());
+        ArcSort(fst, OLabelCompare<Arc>());
+        // XXX: stupid copy
+        FSTImpl<Arc> * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
+        fst::Compose(*(const Fst*)fst, *f->fst, ret->fst);
+        return ret;
+    }
+    return NULL;
+}
 
 template <class Arc>
 FST *
@@ -199,6 +318,19 @@ FSTImpl<Arc>::Determinize() const
     return new FSTImpl<Arc>(ret);
 }
 
+
+template <class Arc>
+void
+FSTImpl<Arc>::_Minimize()
+{
+    // NOTE: we encode/decode here to make the FST functional
+    // (acceptors always are) and thereby avoid library bitching.
+    EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
+    Encode(fst, &enc);
+    fst::Minimize(fst);
+    Decode(fst, enc);
+}
+
 template <class Arc>
 FST *
 FSTImpl<Arc>::Minimize() const
@@ -208,10 +340,42 @@ FSTImpl<Arc>::Minimize() const
     EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
     FSTImpl * tmp = new FSTImpl(fst->Copy());
     Encode(tmp->fst, &enc);
-    VectorFst<Arc> * ret = new VectorFst<Arc>;
     fst::Minimize(tmp->fst);
     Decode(tmp->fst, enc);
     return tmp;
+}
+
+template <class Arc>
+string
+FSTImpl<Arc>::_Draw() const
+{
+    // OMGWTFBBQ!!!
+    // FstDrawer(const Fst<A> &fst,
+    //           const SymbolTable *isyms,
+    //           const SymbolTable *osyms,
+    //           const SymbolTable *ssyms,
+    //           bool accep,
+    //           string title,
+    //           float width,
+    //           float height,
+    //           bool portrait,
+    //           bool vertical,
+    //           float ranksep,
+    //           float nodesep,
+    //           int fontsize,
+    //           int precision)
+    FstDrawer<Arc> fd(*fst,
+                      NULL, NULL, NULL, // isyms, osyms, ssyms
+                      fst->Properties(kAcceptor, true),
+                      "",
+                      8.5, 11,
+                      false,
+                      false,
+                      0.2, 0.2,
+                      10, 3);
+    ostringstream os;
+    fd.Draw(&os, "<string>");
+    return os.str();
 }
 
 inline static bool strok(const char * s)
@@ -270,6 +434,60 @@ FSTImpl<Arc>::_Decode(int flags)
 {
     EncodeMapper<Arc> tmp(flags, DECODE);
     Decode(fst, tmp);
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::strings(vector<string>& out) const
+{
+    _strings(out, fst->Start(), "");
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::_strings(vector<string>& out, int st, const string& cur) const
+{
+    if (fst->Final(st) != Arc::Weight::Zero()) {
+        out.push_back(cur);
+    } else {
+        for (ArcIterator<fst::Fst<Arc> > ai(*fst, st); !ai.Done(); ai.Next()) {
+            ostringstream il;
+            il << cur << ai.Value().ilabel;
+            _strings(out, ai.Value().nextstate, il.str());
+        }
+    }
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::normalize()
+{
+    typedef typename Arc::Weight Weight;
+    Push(fst, (fst::ReweightType)INITIAL);
+    Weight w = Weight::Zero();
+    for (ArcIterator<fst::Fst<Arc> > ai(*fst, fst->Start());
+         !ai.Done(); ai.Next())
+        w = Plus(w, ai.Value().weight);
+    for (MutableArcIterator<Fst> ai(fst, fst->Start());
+         !ai.Done(); ai.Next()) {
+        Arc a = ai.Value();
+        a.weight = Divide(a.weight, w);
+        ai.SetValue(a);
+    }
+}
+
+SV*
+FST::String() const
+{
+    string tmp = _String();
+    return newSVpvn(tmp.c_str(), tmp.size());
+}
+
+SV*
+FST::Draw() const
+{
+    string tmp = _Draw();
+    return newSVpvn(tmp.c_str(), tmp.size());
 }
 
 FST *

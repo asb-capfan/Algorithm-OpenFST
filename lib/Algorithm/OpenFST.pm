@@ -1,6 +1,6 @@
 package Algorithm::OpenFST;
 
-=head1 OPENFST
+=head1 NAME
 
 OpenFST -- Perl bindings for the OpenFST library.
 
@@ -17,10 +17,14 @@ parts I need right now.  At the lowest level, the function and method
 names are the same as the C++ interface, except that some destructive
 methods have a leading underscore.
 
+C<Algorithm::OpenFST> provides a convenient higher-level interface to
+OpenFST's basic operations.  Methods in this interface have lower_case
+names, while those in the raw library interface use StudlyCaps.
+
 =cut
 
 BEGIN {
-$VERSION = '0.01_01'
+$VERSION = '0.01_02'
 }
 require Exporter;
 use vars qw(@ISA @EXPORT_OK @EXPORT_TAGS);
@@ -33,7 +37,7 @@ my @CONST = qw(INPUT OUTPUT INITIAL FINAL STAR PLUS SMRLog SMRTropical
 eval "sub $_ () { ".Algorithm::OpenFST::constant($_)."}" for @CONST;
 
 @ISA = qw(Exporter);
-@EXPORT_OK = (qw(transducer acceptor compose), @CONST);
+@EXPORT_OK = (qw(transducer acceptor compose union), @CONST);
 %EXPORT_TAGS = (
     all => \@EXPORT_OK,
     constants => \@CONST,
@@ -47,6 +51,11 @@ Create a finite-state acceptor from file $file with options %opts.
 =head2 C<$fst = transducer $file, %opts>
 
 Create a finite-state transducer from file $file with options %opts.
+
+=head2 C<$fst = from_list $init, $final, @edges>
+
+Create a transducer with initial state $init, final state $final, and
+edges @edges, where each edge is of the form [FROM, TO, IN, OUT, WEIGHT].
 
 =cut
 
@@ -126,7 +135,7 @@ sub union
 ## Supplementary methods
 package Algorithm::OpenFST::FST;
 
-use overload '""' => sub { shift->CString };
+use overload '""' => sub { shift->String };
 
 ## Non-destructive versions of destructive ops.
 BEGIN {
@@ -141,24 +150,19 @@ sub '.$_.' {
 }
 }
 
-=head1 FST EXTENSIONS
+=head2 C<$fst-E<gt>in>
 
-C<Algorithm::OpenFST> provides a convenient higher-level interface to
-OpenFST's basic operations.
+=head2 C<$fst-E<gt>out>
 
-=head2 C<$fst->in>
-
-=head2 C<$fst->out>
-
-=head2 C<$fst->ensure_state($n)>
+=head2 C<$fst-E<gt>ensure_state($n)>
 
 Ensure that states up to $n exist in $fst.
 
-=head2 C<$fst->add_state($n)>
+=head2 C<$fst-E<gt>add_state($n)>
 
 Add state $n (and previous states, if necessary).
 
-=head2 C<$fst->add_arc($from, $to [, $in [, $out [, $wt]]])
+=head2 C<$fst-E<gt>add_arc($from, $to [, $in [, $out [, $wt]]])
 
 Add an arc from $from to $to with input and output $in and $out, with
 weight $wt.
@@ -197,16 +201,7 @@ sub add_arc
     # my $acc = $t->Properties & Algorithm::OpenFST::ACCEPTOR;
     if (@_ == 2) {
         $t->AddArc(@_, 0, 0, 0);
-    }#  elsif ($acc) {
-    #     if (@_ == 3) {
-    #         $t->AddArc(@_[0,1], 0, $_[2], $_[2]);
-    #     } elsif (@_ == 4) {
-    #         $t->AddArc(@_[0,1,3,2,2]);
-    #     } else {
-    #         warn "add_arc: Bad arc (@_)\n";
-    #     }
-    # }
-    else {
+    } else {
         if (@_ == 3) {
             $t->AddArc(@_[0,1], 0, $_[2], 0);
         } elsif (@_ == 4) {
@@ -219,15 +214,46 @@ sub add_arc
     }
 }
 
-sub normalize
+=head2 C<$ofst = $fst->best_paths($n [, $unique])>
+
+Compute the best $n paths through $fst.  Compute unique paths if
+$unique is true (UNIMPLEMENTED).  If $fst does not use the tropical
+semiring, it is directly converted to and from the tropical semiring.
+
+=head2 C<$ofst = $fst->prune($w)
+
+Prune $fst so paths worse than $w from the best path are removed.
+
+=cut
+
+sub best_paths
 {
     my $fst = shift;
-    $fst->_Push(FINAL);
-    # XXX: wasteful iteration
-    for (0..$fst->NumStates-1) {
-        $fst->SetFinal($_, 0) if $fst->NumArcs($_) == 0;
+    my $smr = $fst->semiring;
+    my $ret;
+    if ($smr == Algorithm::OpenFST::SMRTropical) {
+        $ret = $fst->ShortestPath(@_);
+    } else {
+        $ret = $fst->change_semiring(Algorithm::OpenFST::SMRTropical)
+            ->ShortestPath(@_)->change_semiring($smr);
     }
-    $fst;
+    $ret->normalize;
+    $ret;
+}
+
+sub prune
+{
+    my $fst = shift;
+    my $smr = $fst->semiring;
+    my $ret;
+    if ($smr == Algorithm::OpenFST::SMRTropical) {
+        $ret = $fst->_Prune(@_);
+    } else {
+        $ret = $fst->change_semiring(Algorithm::OpenFST::SMRTropical)
+            ->Prune(@_)->change_semiring($smr);
+    }
+    $ret->normalize;
+    $ret;
 }
 
 1;

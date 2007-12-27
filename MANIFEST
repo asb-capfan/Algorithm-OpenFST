@@ -3,13 +3,15 @@ MANIFEST
 Makefile.PL
 OpenFST.xs
 README
+const-c.inc
+const-xs.inc
 g2hd.txt
 h0.txt
 lib/Algorithm/OpenFST.pm
 openfst-impl.cc
 openfst-io.h
 openfst.h
-test.pl
 ppport.h
+test.pl
 typemap
 META.yml                                 Module meta-data (added by MakeMaker)
