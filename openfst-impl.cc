@@ -1,6 +1,3 @@
-// All right, Mr. Google monkey.  Calling exit(1) in a library a bad
-// thing, m'kay?
-
 #include <exception>
 #include <string>
 using namespace std;
@@ -17,29 +14,7 @@ public:
 	{ return msg.c_str(); }
 };
 
-#define exit(n) (throw fst_exception((n) ? "ugh" : "ok"))
-#include "fst/lib/compat.h"
-#undef exit
-
-#include "fst/lib/arcsort.h"
-#include "fst/lib/closure.h"
-#include "fst/lib/compose.h"
-#include "fst/lib/concat.h"
-#include "fst/lib/determinize.h"
-#include "fst/lib/encode.h"
-#include "fst/lib/fst.h"
-#include "fst/lib/intersect.h"
-#include "fst/lib/minimize.h"
-#include "fst/lib/mutable-fst.h"
-#include "fst/lib/project.h"
-#include "fst/lib/prune.h"
-#include "fst/lib/push.h"
-#include "fst/lib/rmepsilon.h"
-#include "fst/lib/shortest-path.h"
-#include "fst/lib/symbol-table.h"
-#include "fst/lib/union.h"
-#include "fst/lib/vector-fst.h"
-#include "fst/bin/draw-main.h"
+#include "openfst-pre.h"
 #include <sstream>
 #include <fstream>
 using namespace std;
@@ -112,13 +87,25 @@ struct FSTImpl : public FST
     virtual void _Encode(int type);
     virtual void _Decode(int type);
 
+    virtual FST * Reverse() const;
+    virtual void _Invert()
+        { fst::Invert(fst); }
+
     // Cleanup
     // XXX: why only some destructive?
-    virtual FST * Determinize() const;
-    virtual void _RmEpsilon()
+    virtual FST * Determinize(float) const;
+    virtual void _RmEpsilon(float delta)
         {
-            fst::RmEpsilon(fst);
+            try {
+                vector<typename Arc::Weight> d;
+                AutoQueue<typename Arc::StateId>
+                    queue(*fst, &d, EpsilonArcFilter<Arc>());
+                RmEpsilonOptions<Arc, AutoQueue<typename Arc::StateId> >
+                    opts(&queue, delta, true);
+                RmEpsilon(fst, &d, opts);
+            } catch (fst_exception e) { }
         }
+    virtual FST * EpsNormalize(int ) const;
     virtual void _Minimize();
     virtual FST * Minimize() const;
 
@@ -146,6 +133,32 @@ struct FSTImpl : public FST
     virtual void AddArc(int from, int to, float w, int in, int out)
         { fst->AddArc(from, Arc(in, out, w, to)); }
 
+    void init_symtab() const
+        {
+            if (!fst->InputSymbols()) {
+                SymbolTable * st = new SymbolTable("");
+                // remember to add epsilon!
+                st->AddSymbol("-");
+                fst->SetInputSymbols(st);
+            }
+            if (!fst->OutputSymbols())
+                fst->SetOutputSymbols(fst->InputSymbols());
+        }
+    virtual int add_input_symbol(const char * s)
+        {
+            if (!fst->InputSymbols())
+                init_symtab();
+            return ((SymbolTable*)fst->InputSymbols())->AddSymbol(string(s));
+        }
+    virtual int add_output_symbol(const char * s)
+        {
+            if (!fst->OutputSymbols())
+                init_symtab();
+            return ((SymbolTable*)fst->OutputSymbols())->AddSymbol(string(s));
+        }
+
+    virtual void add_arc(int, int, float, const char *, const char *);
+
     virtual void WriteBinary(const char * file) const
         {
             fst->fst::Fst<Arc>::Write(file);
@@ -154,13 +167,16 @@ struct FSTImpl : public FST
     virtual void WriteText(const char * file) const
         {
             ofstream os(file);
-            FstPrinter<Arc>(*fst, NULL, NULL, NULL, false).Print(&os, file);
+            FstPrinter<Arc>(*fst, fst->InputSymbols(),
+                            fst->OutputSymbols(),
+                            NULL, false).Print(&os, file);
         }
 
     virtual string _String() const
         {
             ostringstream os;
-            FstPrinter<Arc>(*fst, NULL, NULL, NULL, false)
+            FstPrinter<Arc>(*fst, fst->InputSymbols(),
+                            fst->OutputSymbols(), NULL, false)
                 .Print(&os, "<string>");
             return os.str();
         }
@@ -197,7 +213,174 @@ struct FSTImpl : public FST
         }
     void _strings(vector<string>& out, int st, const string& cur) const;
     virtual void strings(vector<string>&) const;
+    virtual SymbolTable * InputSymbols() const
+        { return (SymbolTable *)fst->InputSymbols(); }
+    virtual SymbolTable * OutputSymbols() const
+        { return (SymbolTable *)fst->OutputSymbols(); }
+    virtual void SetInputSymbols(const SymbolTable * s)
+        { fst->SetInputSymbols(s); }
+    virtual void SetOutputSymbols(const SymbolTable * s)
+        { fst->SetOutputSymbols(s); }
 };
+
+//////////////////////////////////////////////////////////////////////
+// Standard functions/methods:
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Intersect(FST * that)
+{
+    const FSTImpl * f = dynamic_cast<const FSTImpl<Arc>*>(that);
+    if (f) {
+        // XXX: maybe encode and try again here?
+        if (!fst->Properties(kAcceptor, true))
+            return NULL;
+        if (!f->fst->Properties(kAcceptor, true))
+            return NULL;
+        // XXX: apparently intersect requires arc-sorting.
+        ArcSort(f->fst, ILabelCompare<Arc>());
+        ArcSort(fst, OLabelCompare<Arc>());
+        // XXX: stupid copy
+        FSTImpl<Arc> * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
+        fst::Intersect(*(const Fst*)fst, *f->fst, ret->fst);
+        return ret;
+    }
+    return NULL;
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Compose(FST * that)
+{
+    FSTImpl * f = dynamic_cast<FSTImpl<Arc>*>(that);
+    if (!f)
+        return NULL;
+    if (!CompatSymbols(fst->OutputSymbols(), f->fst->InputSymbols())) {
+        cerr << "incompatible symbol tables in Compose()" << endl;
+        if (fst->OutputSymbols())
+            fst->OutputSymbols()->WriteText(cerr);
+        else
+            cerr << "<NULL>" << endl;
+        if (f->fst->InputSymbols())
+            f->fst->InputSymbols()->WriteText(cerr);
+        else
+            cerr << "<NULL>" << endl;
+        return NULL;
+    }
+    ArcSort(f->fst, ILabelCompare<Arc>());
+    ArcSort(fst, OLabelCompare<Arc>());
+    // XXX: stupid copy
+    FSTImpl<Arc> * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
+    // Feeding my output into his input.
+    if (fst->OutputSymbols() || f->fst->InputSymbols()) {
+        SymbolTable * rst = new SymbolTable("");
+        if (fst->OutputSymbols())
+            rst->AddTable(*fst->OutputSymbols());
+        if (f->fst->InputSymbols())
+            rst->AddTable(*f->fst->InputSymbols());
+        ret->fst->SetInputSymbols(fst->InputSymbols());
+        ret->fst->SetOutputSymbols(f->fst->OutputSymbols());
+    }
+    fst::Compose(*(const Fst*)fst, *f->fst, ret->fst);
+    return ret;
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Determinize(float del) const
+{
+    // NOTE: we encode/decode here to make the FST functional
+    // (acceptors always are) and thereby avoid library bitching.
+    EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
+    FSTImpl * tmp = new FSTImpl(fst->Copy());
+    Encode(tmp->fst, &enc);
+    VectorFst<Arc> * ret = new VectorFst<Arc>;
+    fst::Determinize(*tmp->fst, ret, DeterminizeOptions(del));
+    Decode(ret, enc);
+    return new FSTImpl<Arc>(ret);
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::EpsNormalize(int type) const
+{
+    FSTImpl * ret = new FSTImpl(fst->Copy());
+    // XXX: type-1 so project and epsnormalize use the same constants
+    try {
+        fst::EpsNormalize(*fst, ret->fst, (EpsNormalizeType)(type-1));
+    } catch (fst_exception e) {
+        delete ret;
+        cerr << "EpsNormalize failed." << endl;
+        return Copy();
+    }
+    return ret;
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::_Minimize()
+{
+    // NOTE: we encode/decode here to make the FST functional
+    // (acceptors always are) and thereby avoid library bitching.
+    try {
+        EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
+        Encode(fst, &enc);
+        fst::Minimize(fst);
+        Decode(fst, enc);
+    } catch (fst_exception e) { }
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Minimize() const
+{
+    // NOTE: we encode/decode here to make the FST functional
+    // (acceptors always are) and thereby avoid library bitching.
+    EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
+    FSTImpl * tmp = new FSTImpl(fst->Copy());
+    try {
+        Encode(tmp->fst, &enc);
+        fst::Minimize(tmp->fst);
+        Decode(tmp->fst, enc);
+        return tmp;
+    } catch (fst_exception e) {
+        delete tmp;
+        return (FST *)this;
+    }
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::_Encode(int flags)
+{
+    EncodeMapper<Arc> tmp(flags, ENCODE);
+    Encode(fst, &tmp);
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::_Decode(int flags)
+{
+    EncodeMapper<Arc> tmp(flags, DECODE);
+    Decode(fst, tmp);
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::Reverse() const
+{
+    FSTImpl * ret = new FSTImpl(fst->Copy());
+    fst::Reverse(*fst, ret->fst);
+    return ret;
+}
+
+//////////////////////////////////////////////////////////////////////
+// Extension functions/methods:
+
+// template <>
+// int
+// FSTImpl<RealArc>::semiring() const
+// { return SMRReal; }
 
 template <>
 int
@@ -231,15 +414,36 @@ FSTImpl<Arc>::copy_to(FST * to) const
     }
 }
 
+// template <>
+// FST *
+// FSTImpl<RealArc>::change_semiring(int smr) const
+// {
+//     if (smr == SMRReal)
+//         return Copy();
+//     FST * ret;
+//     if (smr == SMRLog) {
+//         ret = new FSTImpl<LogArc>(new VectorFst<LogArc>);
+//     } else if (smr == SMRTropical) {
+//         ret = new FSTImpl<StdArc>(new VectorFst<StdArc>);
+//     } else {
+//         cerr << "Unknown semiring " << smr << endl;
+//         return NULL;
+//     }
+//     copy_to(ret);
+//     return ret;
+// }
+
 template <>
 FST *
 FSTImpl<StdArc>::change_semiring(int smr) const
 {
     if (smr == SMRTropical)
         return Copy();
-    FST * ret;
+    FSTImpl<LogArc> * ret;
     if (smr == SMRLog) {
         ret = new FSTImpl<LogArc>(new VectorFst<LogArc>);
+        ret->fst->SetInputSymbols(fst->InputSymbols());
+        ret->fst->SetOutputSymbols(fst->OutputSymbols());
     } else {
         cerr << "Unknown semiring " << smr << endl;
         return NULL;
@@ -254,9 +458,11 @@ FSTImpl<LogArc>::change_semiring(int smr) const
 {
     if (smr == SMRLog)
         return Copy();
-    FST * ret;
+    FSTImpl<StdArc> * ret;
     if (smr == SMRTropical) {
         ret = new FSTImpl<StdArc>(new VectorFst<StdArc>);
+        ret->fst->SetInputSymbols(fst->InputSymbols());
+        ret->fst->SetOutputSymbols(fst->OutputSymbols());
     } else {
         cerr << "Unknown semiring " << smr << endl;
         return NULL;
@@ -266,117 +472,81 @@ FSTImpl<LogArc>::change_semiring(int smr) const
 }
 
 template <class Arc>
-FST *
-FSTImpl<Arc>::Intersect(FST * that)
+void
+FSTImpl<Arc>::add_arc(int from, int to, float w,
+                      const char * in, const char * out)
 {
-    const FSTImpl * f = dynamic_cast<const FSTImpl<Arc>*>(that);
-    if (f) {
-        // XXX: maybe encode and try again here?
-        if (!fst->Properties(kAcceptor, true))
-            return NULL;
-        if (!f->fst->Properties(kAcceptor, true))
-            return NULL;
-        // XXX: apparently intersect requires arc-sorting.
-        ArcSort(f->fst, ILabelCompare<Arc>());
-        ArcSort(fst, OLabelCompare<Arc>());
-        // XXX: stupid copy
-        FSTImpl<Arc> * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
-        fst::Intersect(*(const Fst*)fst, *f->fst, ret->fst);
-        return ret;
-    }
-    return NULL;
+    int iin = add_input_symbol(in);
+    int iout = add_output_symbol(out);
+    // fprintf(stderr, "iin = %d, iout = %d\n", iin, iout);
+    AddArc(from, to, w, iin, iout);
 }
-
-template <class Arc>
-FST *
-FSTImpl<Arc>::Compose(FST * that)
-{
-    FSTImpl * f = dynamic_cast<FSTImpl<Arc>*>(that);
-    if (f) {
-        ArcSort(f->fst, ILabelCompare<Arc>());
-        ArcSort(fst, OLabelCompare<Arc>());
-        // XXX: stupid copy
-        FSTImpl<Arc> * ret = new FSTImpl<Arc>(new VectorFst<Arc>);
-        fst::Compose(*(const Fst*)fst, *f->fst, ret->fst);
-        return ret;
-    }
-    return NULL;
-}
-
-template <class Arc>
-FST *
-FSTImpl<Arc>::Determinize() const
-{
-    // NOTE: we encode/decode here to make the FST functional
-    // (acceptors always are) and thereby avoid library bitching.
-    EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
-    FSTImpl * tmp = new FSTImpl(fst->Copy());
-    Encode(tmp->fst, &enc);
-    VectorFst<Arc> * ret = new VectorFst<Arc>;
-    fst::Determinize(*tmp->fst, ret);
-    Decode(ret, enc);
-    return new FSTImpl<Arc>(ret);
-}
-
 
 template <class Arc>
 void
-FSTImpl<Arc>::_Minimize()
+FSTImpl<Arc>::strings(vector<string>& out) const
 {
-    // NOTE: we encode/decode here to make the FST functional
-    // (acceptors always are) and thereby avoid library bitching.
-    EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
-    Encode(fst, &enc);
-    fst::Minimize(fst);
-    Decode(fst, enc);
+    _strings(out, fst->Start(), "");
 }
 
 template <class Arc>
+void
+FSTImpl<Arc>::_strings(vector<string>& out, int st, const string& cur) const
+{
+    if (fst->Final(st) != Arc::Weight::Zero()) {
+        out.push_back(cur);
+    } else {
+        for (ArcIterator<fst::Fst<Arc> > ai(*fst, st); !ai.Done(); ai.Next()) {
+            ostringstream il;
+            il << cur << ai.Value().ilabel;
+            _strings(out, ai.Value().nextstate, il.str());
+        }
+    }
+}
+
+template <class Arc>
+void
+FSTImpl<Arc>::normalize()
+{
+    typedef typename Arc::Weight Weight;
+    Push(fst, (fst::ReweightType)INITIAL);
+    Weight w = Weight::Zero();
+    int st = fst->Start();
+    if (st < 0) {
+        cerr << "tried to normalize empty fst" << endl;
+        return;
+    }
+    for (ArcIterator<fst::Fst<Arc> > ai(*fst, st); !ai.Done(); ai.Next())
+        w = Plus(w, ai.Value().weight);
+    for (MutableArcIterator<Fst> ai(fst, st); !ai.Done(); ai.Next()) {
+        Arc a = ai.Value();
+        a.weight = Divide(a.weight, w);
+        ai.SetValue(a);
+    }
+}
+
+SV*
+FST::String() const
+{
+    string tmp = _String();
+    return newSVpvn(tmp.c_str(), tmp.size());
+}
+
 FST *
-FSTImpl<Arc>::Minimize() const
+VectorFST(int smr)
 {
-    // NOTE: we encode/decode here to make the FST functional
-    // (acceptors always are) and thereby avoid library bitching.
-    EncodeMapper<Arc> enc(ENCODE_LABEL, ENCODE);
-    FSTImpl * tmp = new FSTImpl(fst->Copy());
-    Encode(tmp->fst, &enc);
-    fst::Minimize(tmp->fst);
-    Decode(tmp->fst, enc);
-    return tmp;
+    switch (smr) {
+    case SMRLog:
+        return new FSTImpl<LogArc>(new VectorFst<LogArc>);
+    case SMRTropical:
+        return new FSTImpl<StdArc>(new VectorFst<StdArc>);
+    default:
+        return NULL;
+    };
 }
 
-template <class Arc>
-string
-FSTImpl<Arc>::_Draw() const
-{
-    // OMGWTFBBQ!!!
-    // FstDrawer(const Fst<A> &fst,
-    //           const SymbolTable *isyms,
-    //           const SymbolTable *osyms,
-    //           const SymbolTable *ssyms,
-    //           bool accep,
-    //           string title,
-    //           float width,
-    //           float height,
-    //           bool portrait,
-    //           bool vertical,
-    //           float ranksep,
-    //           float nodesep,
-    //           int fontsize,
-    //           int precision)
-    FstDrawer<Arc> fd(*fst,
-                      NULL, NULL, NULL, // isyms, osyms, ssyms
-                      fst->Properties(kAcceptor, true),
-                      "",
-                      8.5, 11,
-                      false,
-                      false,
-                      0.2, 0.2,
-                      10, 3);
-    ostringstream os;
-    fd.Draw(&os, "<string>");
-    return os.str();
-}
+//////////////////////////////////////////////////////////////////////
+// I/O
 
 inline static bool strok(const char * s)
 { return s && *s; }
@@ -409,7 +579,7 @@ ReadText(const char * file, int smr, bool acceptor,
 
     case SMRTropical: {
         FstReader<fst::StdArc> r;
-        MutableFst<fst::StdArc> * f 
+        MutableFst<fst::StdArc> * f
             = r.read(in, file, is, os, ss, acceptor, true, true, false);
         return f ? new FSTImpl<fst::StdArc>(f) : NULL;
         break;
@@ -421,66 +591,38 @@ ReadText(const char * file, int smr, bool acceptor,
 }
 
 template <class Arc>
-void
-FSTImpl<Arc>::_Encode(int flags)
+string
+FSTImpl<Arc>::_Draw() const
 {
-    EncodeMapper<Arc> tmp(flags, ENCODE);
-    Encode(fst, &tmp);
-}
-
-template <class Arc>
-void
-FSTImpl<Arc>::_Decode(int flags)
-{
-    EncodeMapper<Arc> tmp(flags, DECODE);
-    Decode(fst, tmp);
-}
-
-template <class Arc>
-void
-FSTImpl<Arc>::strings(vector<string>& out) const
-{
-    _strings(out, fst->Start(), "");
-}
-
-template <class Arc>
-void
-FSTImpl<Arc>::_strings(vector<string>& out, int st, const string& cur) const
-{
-    if (fst->Final(st) != Arc::Weight::Zero()) {
-        out.push_back(cur);
-    } else {
-        for (ArcIterator<fst::Fst<Arc> > ai(*fst, st); !ai.Done(); ai.Next()) {
-            ostringstream il;
-            il << cur << ai.Value().ilabel;
-            _strings(out, ai.Value().nextstate, il.str());
-        }
-    }
-}
-
-template <class Arc>
-void
-FSTImpl<Arc>::normalize()
-{
-    typedef typename Arc::Weight Weight;
-    Push(fst, (fst::ReweightType)INITIAL);
-    Weight w = Weight::Zero();
-    for (ArcIterator<fst::Fst<Arc> > ai(*fst, fst->Start());
-         !ai.Done(); ai.Next())
-        w = Plus(w, ai.Value().weight);
-    for (MutableArcIterator<Fst> ai(fst, fst->Start());
-         !ai.Done(); ai.Next()) {
-        Arc a = ai.Value();
-        a.weight = Divide(a.weight, w);
-        ai.SetValue(a);
-    }
-}
-
-SV*
-FST::String() const
-{
-    string tmp = _String();
-    return newSVpvn(tmp.c_str(), tmp.size());
+    // OMGWTFBBQ!!!
+    // FstDrawer(const Fst<A> &fst,
+    //           const SymbolTable *isyms,
+    //           const SymbolTable *osyms,
+    //           const SymbolTable *ssyms,
+    //           bool accep,
+    //           string title,
+    //           float width,
+    //           float height,
+    //           bool portrait,
+    //           bool vertical,
+    //           float ranksep,
+    //           float nodesep,
+    //           int fontsize,
+    //           int precision)
+    FstDrawer<Arc> fd(*fst,
+                      fst->InputSymbols(),
+                      fst->OutputSymbols(),
+                      NULL, // isyms, osyms, ssyms
+                      fst->Properties(kAcceptor, true),
+                      "",
+                      8.5, 11,
+                      true,
+                      false,
+                      0.3, 0.2,
+                      10, 3);
+    ostringstream os;
+    fd.Draw(&os, "<string>");
+    return os.str();
 }
 
 SV*
@@ -502,19 +644,6 @@ ReadBinary(const char * file, int smr)
         return new FSTImpl<fst::StdArc>(file);
         break;
 
-    default:
-        return NULL;
-    };
-}
-
-FST *
-VectorFST(int smr)
-{
-    switch (smr) {
-    case SMRLog:
-        return new FSTImpl<LogArc>(new VectorFst<LogArc>);
-    case SMRTropical:
-        return new FSTImpl<StdArc>(new VectorFst<StdArc>);
     default:
         return NULL;
     };

@@ -1,7 +1,7 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Algorithm-OpenFST
-version:      0.01_02
+version:      0.01_03
 version_from: lib/Algorithm/OpenFST.pm
 installdirs:  site
 requires:

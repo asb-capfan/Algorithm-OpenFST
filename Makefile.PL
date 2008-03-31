@@ -33,11 +33,13 @@ WriteMakefile(
     XSOPT             => '-C++',
     C                 => [qw(openfst-impl.cc)],
     OBJECT            => 'openfst-impl.o OpenFST.o',
+    ## -fno-default-inline because OpenFST was written by stupid Java
+    ## monkeys who put huge function bodies inside class declarations.
     CCFLAGS           => '-fno-strict-aliasing',
-    CC                => 'g++',
+    CC                => 'time g++',
     LDDLFLAGS         => $LDDLFLAGS,
     LDFLAGS           => $LDFLAGS,
-    LD                => 'g++',
+    LD                => 'time g++',
     ## OpenFST is stupidly written as a big pile of headers (does
     ## anyone know how to write modular C++ template libraries
     ## anymore?!), so optmization sucks ram like no one's business.

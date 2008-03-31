@@ -223,8 +223,9 @@ private:
                      << " is not mapped to any textual symbol"
                      << ", symbol table = " << syms->Name()
                      << ", destination = " << dest_;
-            }
-            *ostrm_ << symbol;
+                *ostrm_ << '<' << id << '>';
+            } else
+                *ostrm_ << symbol;
         } else {
             *ostrm_ << id;
         }

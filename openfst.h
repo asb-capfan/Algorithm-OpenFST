@@ -16,6 +16,7 @@ using namespace std;
 
 #define SMRLog 1
 #define SMRTropical 2
+#define SMRReal 3
 // XXX: sync w/ project.h
 #define INPUT 1
 #define OUTPUT 2
@@ -32,10 +33,75 @@ using namespace std;
 #define ACCEPTOR 0x0000000000010000ULL
 #define NOT_ACCEPTOR 0x0000000000020000ULL
 
+namespace fst {
+    class SymbolTable;
+};
+
+using fst::SymbolTable;
+
+// class RealWeight : public FloatWeight {
+// public:
+//     typedef RealWeight ReverseWeight;
+
+//     RealWeight() : FloatWeight() {}
+
+//     RealWeight(float f) : FloatWeight(f) {}
+
+//     RealWeight(const RealWeight &w) : FloatWeight(w) {}
+
+//     static const RealWeight Zero() {   return 0F; }
+
+//     static const RealWeight One() { return 1F; }
+
+//     static const string &Type() {
+//         static const string type = "real";
+//         return type;
+//     }
+
+//     bool Member() const {
+//         // Fails for IEEE NaN
+//         return Value() == Value();
+//     }
+
+//     RealWeight Quantize(float delta = kDelta) const {
+//         return RealWeight(floor(Value()/delta + 0.5F) * delta);
+//     }
+
+//     RealWeight Reverse() const { return *this; }
+
+//     static uint64 Properties() {
+//         return kLeftSemiring | kRightSemiring | kCommutative;
+//     }
+// };
+
+// struct RealArc {
+//     typedef int Label;
+//     typedef RealWeight Weight;
+//     typedef int StateId;
+
+//     RealArc(Label i, Label o, Weight w, StateId s)
+//         : ilabel(i), olabel(o), weight(w), nextstate(s) {}
+
+//     RealArc() {}
+
+//     static const string &Type() {  // Arc type name
+//         static const string type = "log";
+//         return type;
+//     }
+
+//     Label ilabel;       // Transition input label
+//     Label olabel;       // Transition output label
+//     Weight weight;      // Transition weight
+//     StateId nextstate;  // Transition destination state
+// };
+
 /// Base class for Perl FSTs
 struct FST
 {
-
+    virtual SymbolTable * InputSymbols() const = 0;
+    virtual SymbolTable * OutputSymbols() const = 0;
+    virtual void SetInputSymbols(const SymbolTable *) = 0;
+    virtual void SetOutputSymbols(const SymbolTable *) = 0;
     virtual FST * Copy() const = 0;
     virtual FST * change_semiring(int ) const = 0;
     virtual int semiring() const = 0;
@@ -53,12 +119,15 @@ struct FST
     virtual void _Project(int ) = 0;
     virtual void _Encode(int ) = 0;
     virtual void _Decode(int ) = 0;
+    virtual FST * Reverse() const = 0;
+    virtual void _Invert() = 0;
 
     // Cleanup
     // XXX: why only some destructive?
-    virtual FST * Determinize() const = 0;
+    virtual FST * Determinize(float) const = 0;
     virtual void _Prune(float) = 0;
-    virtual void _RmEpsilon() = 0;
+    virtual void _RmEpsilon(float) = 0;
+    virtual FST * EpsNormalize(int ) const = 0;
     virtual void _Minimize() = 0;
     virtual FST * Minimize() const = 0;
     virtual void _Push(int) = 0;
@@ -70,6 +139,10 @@ struct FST
     virtual void SetFinal(int, float = 0) = 0;
     virtual float Final(int) const = 0;
     virtual void AddArc(int, int, float, int, int) = 0;
+
+    virtual int add_input_symbol(const char * s) = 0;
+    virtual int add_output_symbol(const char * s) = 0;
+    virtual void add_arc(int, int, float, const char *, const char *) = 0;
 
     virtual void WriteBinary(const char * ) const = 0;
     virtual void WriteText(const char *) const = 0;

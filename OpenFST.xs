@@ -1,3 +1,4 @@
+#include "fst/lib/symbol-table.h"
 extern "C" {
 #include "EXTERN.h"
 #include "perl.h"
@@ -49,6 +50,7 @@ Transducer(f, smr=1, is=0, os=0, ss=0)
 	const char * ss
 
 MODULE = Algorithm::OpenFST	PACKAGE = Algorithm::OpenFST::FST
+PROTOTYPES: DISABLE
 
 void
 FST::DESTROY()
@@ -81,10 +83,18 @@ FST::_Project(n)
 	int	n
 
 FST *
-FST::Determinize()
+FST::Reverse()
 
 void
-FST::_RmEpsilon()
+FST::_Invert()
+
+FST *
+FST::Determinize(del = 1.024e-3)
+	float	del
+
+void
+FST::_RmEpsilon(del = 1.024e-3)
+	float	del
 
 void
 FST::_Minimize()
@@ -93,8 +103,8 @@ FST *
 FST::Minimize()
 
 void
-FST::_Prune(i)
-	int	i
+FST::_Prune(w)
+	float	w
 
 void
 FST::_Push(i)
@@ -111,7 +121,7 @@ int
 FST::Start()
 
 void
-FST::SetFinal(n, w)
+FST::SetFinal(n, w = 0)
 	int	n
 	float	w
 
@@ -177,3 +187,59 @@ FST::strings()
       for (int i = 0; i < tmp.size(); i++)
           PUSHs(sv_2mortal(newSVpvn(tmp[i].c_str(), tmp[i].size())));
       XSRETURN(tmp.size());
+
+int
+FST::add_input_symbol(s)
+	char *	s
+
+int
+FST::add_output_symbol(s)
+	char *	s
+
+void
+FST::add_arc(a, b, w, i, o)
+	int	a
+	int	b
+	float	w
+	char *	i
+	char *	o
+
+SymbolTable *
+FST::InputSymbols()
+
+SymbolTable *
+FST::OutputSymbols()
+
+void
+FST::SetInputSymbols(s)
+	SymbolTable *	s
+
+void
+FST::SetOutputSymbols(s)
+	SymbolTable *	s
+
+void
+FST::out_syms()
+    PPCODE:
+	if (THIS->OutputSymbols()) {
+            fst::SymbolTableIterator i(*THIS->OutputSymbols());
+            while (!i.Done()) {
+                XPUSHs(sv_2mortal(newSVpv(i.Symbol(), 0)));
+                i.Next();
+            }
+        }
+
+void
+FST::in_syms()
+    PPCODE:
+	if (THIS->InputSymbols()) {
+            fst::SymbolTableIterator i(*THIS->InputSymbols());
+            while (!i.Done()) {
+                XPUSHs(sv_2mortal(newSVpv(i.Symbol(), 0)));
+                i.Next();
+            }
+        }
+
+FST *
+FST::EpsNormalize(dir)
+	int	dir

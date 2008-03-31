@@ -24,7 +24,7 @@ names, while those in the raw library interface use StudlyCaps.
 =cut
 
 BEGIN {
-$VERSION = '0.01_02'
+$VERSION = '0.01_03'
 }
 require Exporter;
 use vars qw(@ISA @EXPORT_OK @EXPORT_TAGS);
@@ -37,7 +37,15 @@ my @CONST = qw(INPUT OUTPUT INITIAL FINAL STAR PLUS SMRLog SMRTropical
 eval "sub $_ () { ".Algorithm::OpenFST::constant($_)."}" for @CONST;
 
 @ISA = qw(Exporter);
-@EXPORT_OK = (qw(transducer acceptor compose union), @CONST);
+@EXPORT_OK = (qw(
+acceptor
+compose
+concat
+from_list
+transducer
+union
+universal
+), @CONST);
 %EXPORT_TAGS = (
     all => \@EXPORT_OK,
     constants => \@CONST,
@@ -77,9 +85,13 @@ sub transducer
 sub from_list
 {
     my $ret = Algorithm::OpenFST::VectorFST(Algorithm::OpenFST::SMRLog);
-    my ($init, $final) = splice @_, 0, 2;
+    my ($init, $final, $syms) = splice @_, 0, 3;
     ## Add edges
-    $ret->add_arc(@$_) for @_;
+    for (@$syms) {
+        $ret->add_input_symbol($_);
+        $ret->add_output_symbol($_);
+    }
+    $ret->add_arc_safe(@$_) for @_;
     ## initial
     $ret->SetStart($init);
     ## Final states
@@ -95,6 +107,32 @@ sub from_list
         }
     }
     $ret;
+}
+
+
+=head2 C<$fst = universal $max>
+
+Create a universal acceptor with output symbols 1..$max.
+
+=cut
+
+sub universal
+{
+    my $max = shift;
+    my $fst = Algorithm::OpenFST::VectorFST SMRLog;
+    $fst->AddState;
+    $fst->SetStart(0);
+    $fst->SetFinal(0, 0);
+    if (ref $max eq 'ARRAY') {
+        $fst->add_arc(0, 0, 0, $_, '-') for @$max;
+    } elsif (ref $max eq 'Algorithm::OpenFST::FST') {
+        $fst->SetInputSymbols($max->OutputSymbols);
+        # $fst->SetOutputSymbols($max->OutputSymbols);
+        $fst->add_arc(0, 0, 0, $_, '-') for $max->out_syms;
+    } else {
+        $fst->AddArc(0, 0, 0, $_, 0) for 1..$max;
+    }
+    $fst;
 }
 
 =head2 C<$fst = compose @fsts>
@@ -114,9 +152,21 @@ Union transducers @fsts into a single transducer $fst.
 sub compose
 {
     my $ret = shift;
-    $ret = $ret->Compose($_) for @_;
+    unless (ref $ret eq 'Algorithm::OpenFST::FST') {
+        die "aiee: ($ret) ain't no fst!\n";
+    }
+    for (@_) {
+        unless (ref $_ eq 'Algorithm::OpenFST::FST') {
+            die "aiee: (@_) contains a non-fst!\n";
+        }
+        $ret = $ret->Compose($_);
+    }
     $ret
-}
+}# {
+#     my $ret = shift;
+#     $ret = $ret->Compose($_) for @_;
+#     $ret
+# }
 
 sub concat
 {
@@ -139,7 +189,7 @@ use overload '""' => sub { shift->String };
 
 ## Non-destructive versions of destructive ops.
 BEGIN {
-for (qw(Union Concat Closure Project RmEpsilon Prune Push Encode Decode)) {
+for (qw(Union Concat Closure Project RmEpsilon Prune Push Encode Decode Invert)) {
     eval '
 sub '.$_.' {
     my $ret = shift->Copy;
@@ -162,7 +212,7 @@ Ensure that states up to $n exist in $fst.
 
 Add state $n (and previous states, if necessary).
 
-=head2 C<$fst-E<gt>add_arc($from, $to [, $in [, $out [, $wt]]])
+=head2 C<$fst-E<gt>add_arc($from, $to [, $in [, $out [, $wt]]])>
 
 Add an arc from $from to $to with input and output $in and $out, with
 weight $wt.
@@ -171,12 +221,16 @@ weight $wt.
 
 sub in
 {
-    shift->Project(Algorithm::OpenFST::INPUT);
+    my $ret = shift->Project(Algorithm::OpenFST::INPUT);
+    $ret->SetOutputSymbols($ret->InputSymbols);
+    $ret;
 }
 
 sub out
 {
-    shift->Project(Algorithm::OpenFST::OUTPUT);
+    my $ret = shift->Project(Algorithm::OpenFST::OUTPUT);
+    $ret->SetInputSymbols($ret->OutputSymbols);
+    $ret;
 }
 
 sub ensure_state
@@ -194,33 +248,54 @@ sub add_state
     $t->AddState($_[0]);
 }
 
-sub add_arc
+sub add_arc_safe
 {
     my $t = shift;
     $t->ensure_state($_[0] > $_[1] ? $_[0] : $_[1]);
-    # my $acc = $t->Properties & Algorithm::OpenFST::ACCEPTOR;
     if (@_ == 2) {
-        $t->AddArc(@_, 0, 0, 0);
+        $t->add_arc(@_, 0, '-', '-');
     } else {
         if (@_ == 3) {
-            $t->AddArc(@_[0,1], 0, $_[2], 0);
+            $t->add_arc(@_[0,1], 0, $_[2], '-');
         } elsif (@_ == 4) {
-            $t->AddArc(@_[0,1], 0, @_[2,3]);
+            $t->add_arc(@_[0,1], 0, @_[2,3]);
         } elsif (@_ == 5) {
-            $t->AddArc(@_[0,1,4,2,3]);
+            $t->add_arc(@_[0,1,4,2,3]);
         } else {
             warn "add_arc: Bad arc (@_)\n";
         }
     }
 }
 
-=head2 C<$ofst = $fst->best_paths($n [, $unique])>
+sub _syms
+{
+    my ($fst, $f) = @_;
+    my %h;
+    for my $x (split /\n/, "$fst") {
+        my @f = split ' ', $x;
+        next unless @f > 2;
+        undef $h{$f[$f]};
+    }
+    sort { $a <=> $b } keys %h;
+}
+
+# sub in_syms
+# {
+#     shift->_syms(2);
+# }
+
+# sub out_syms
+# {
+#     shift->_syms(3);
+# }
+
+=head2 C<$ofst = $fst-E<gt>best_paths($n [, $unique])>
 
 Compute the best $n paths through $fst.  Compute unique paths if
 $unique is true (UNIMPLEMENTED).  If $fst does not use the tropical
 semiring, it is directly converted to and from the tropical semiring.
 
-=head2 C<$ofst = $fst->prune($w)
+=head2 C<$ofst = $fst-E<gt>prune($w)>
 
 Prune $fst so paths worse than $w from the best path are removed.
 

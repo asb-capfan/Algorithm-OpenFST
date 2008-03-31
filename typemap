@@ -2,6 +2,7 @@ TYPEMAP
 char *            T_PV
 const char *      T_PV
 FST *             T_FST
+SymbolTable *	  T_SYMTAB
 INPUT
 T_FST
 	{
@@ -12,10 +13,23 @@ T_FST
 	        XSRETURN_UNDEF;
 	    }
 	}
+T_SYMTAB
+	{
+	    if (sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG))
+	        $var = ($type)SvIV((SV*)SvRV($arg));
+            else if ($arg == &PL_sv_undef)
+                $var = ($type)0;
+	    else{
+	        warn(\"${Package}::$func_name() -- $var is not a blessed SV\");
+	        XSRETURN_UNDEF;
+	    }
+	}
 T_PV
 	$var = ($type)SvPV_nolen($arg)
 OUTPUT
 T_FST
 	sv_setref_pv($arg, "Algorithm::OpenFST::FST", (void*)$var);
+T_SYMTAB
+	sv_setref_pv($arg, "Algorithm::OpenFST::SymbolTable", (void*)$var);
 T_PV
 	sv_setpv((SV*)$arg, $var);
