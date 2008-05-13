@@ -5,13 +5,15 @@ OpenFST.xs
 README
 const-c.inc
 const-xs.inc
-g2hd.txt
-h0.txt
 lib/Algorithm/OpenFST.pm
+markovize.h
 openfst-impl.cc
+openfst-impl.h
 openfst-io.h
+openfst-pre.h
 openfst.h
 ppport.h
 test.pl
+trie.h
 typemap
 META.yml                                 Module meta-data (added by MakeMaker)

@@ -3,6 +3,9 @@
 
 // XXX: stolen from {compile,print}-main.h, but avoiding exit(1) stupidity.
 
+using namespace fst;
+using namespace std;
+
 template <class A> class FstReader {
 public:
     typedef A Arc;

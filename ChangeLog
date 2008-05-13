@@ -1,3 +1,9 @@
+2008-05-13  Sean O'Rourke  <seano@cs.ucla.edu>
+
+	* VERSION 0.01_04
+	* markovize.h, trie.h: Added
+	* misc: other additions / fixes.
+
 2008-03-31  Sean O'Rourke  <seano@cpan.org>
 
 	* VERSION 0.01_02: misc changes.

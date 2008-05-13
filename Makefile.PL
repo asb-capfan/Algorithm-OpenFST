@@ -10,10 +10,8 @@ WriteConstants(
 );
 EOS
 
-$FST = prompt("OpenFST source directory: ",
-              "$ENV{HOME}/research/external/openfst"
-              # 'FAIL'
-);
+$FST = "$ENV{HOME}/research/external/openfst";
+$FST = prompt("OpenFST source directory: ") unless -d $FST;
 die 'Sorry, you need OpenFST on your machine.' unless -d $FST && -d "$FST/fst";
 
 ## Avoid teh suck of building fat binaries:

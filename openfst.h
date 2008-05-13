@@ -3,6 +3,8 @@
 
 #include <string>
 #include <vector>
+#include <exception>
+
 extern "C" {
 #include "EXTERN.h"
 #include "perl.h"
@@ -12,6 +14,7 @@ extern "C" {
 }
 #undef Copy
 #undef Zero
+#undef Move
 using namespace std;
 
 #define SMRLog 1
@@ -39,62 +42,6 @@ namespace fst {
 
 using fst::SymbolTable;
 
-// class RealWeight : public FloatWeight {
-// public:
-//     typedef RealWeight ReverseWeight;
-
-//     RealWeight() : FloatWeight() {}
-
-//     RealWeight(float f) : FloatWeight(f) {}
-
-//     RealWeight(const RealWeight &w) : FloatWeight(w) {}
-
-//     static const RealWeight Zero() {   return 0F; }
-
-//     static const RealWeight One() { return 1F; }
-
-//     static const string &Type() {
-//         static const string type = "real";
-//         return type;
-//     }
-
-//     bool Member() const {
-//         // Fails for IEEE NaN
-//         return Value() == Value();
-//     }
-
-//     RealWeight Quantize(float delta = kDelta) const {
-//         return RealWeight(floor(Value()/delta + 0.5F) * delta);
-//     }
-
-//     RealWeight Reverse() const { return *this; }
-
-//     static uint64 Properties() {
-//         return kLeftSemiring | kRightSemiring | kCommutative;
-//     }
-// };
-
-// struct RealArc {
-//     typedef int Label;
-//     typedef RealWeight Weight;
-//     typedef int StateId;
-
-//     RealArc(Label i, Label o, Weight w, StateId s)
-//         : ilabel(i), olabel(o), weight(w), nextstate(s) {}
-
-//     RealArc() {}
-
-//     static const string &Type() {  // Arc type name
-//         static const string type = "log";
-//         return type;
-//     }
-
-//     Label ilabel;       // Transition input label
-//     Label olabel;       // Transition output label
-//     Weight weight;      // Transition weight
-//     StateId nextstate;  // Transition destination state
-// };
-
 /// Base class for Perl FSTs
 struct FST
 {
@@ -108,8 +55,9 @@ struct FST
     virtual ~FST() { }
     // Combination
     // XXX: why are only some destructive?
-    virtual FST * Compose(FST * ) = 0;
-    virtual FST * Intersect(FST * ) = 0;
+    virtual FST * Compose(FST * ) const = 0;
+    virtual FST * Intersect(FST * ) const = 0;
+    virtual FST * Difference(FST * ) const = 0;
     // Destructive versions:
     virtual void _Union(const FST * ) = 0;
     virtual void _Concat(const FST * ) = 0;
@@ -158,6 +106,20 @@ struct FST
     // "Other" algorithms
     virtual FST * ShortestPath(unsigned , int ) const = 0;
     virtual void normalize() = 0;
+    virtual FST * markovize(int ) const = 0;
+};
+
+template <typename Arc>
+struct FSTBase : public FST
+{
+    virtual const fst::Fst<Arc> * get_fst() const = 0;
+
+    virtual SymbolTable * InputSymbols() const
+        { return (SymbolTable *)get_fst()->InputSymbols(); }
+    virtual SymbolTable * OutputSymbols() const
+        { return (SymbolTable *)get_fst()->OutputSymbols(); }
+    virtual float Final(int i) const
+        { return get_fst()->Final(i).Value(); }
 };
 
 FST *

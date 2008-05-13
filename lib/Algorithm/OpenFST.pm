@@ -14,17 +14,19 @@ need it.
 
 The interface is very incomplete, since I have only implemented the
 parts I need right now.  At the lowest level, the function and method
-names are the same as the C++ interface, except that some destructive
-methods have a leading underscore.
+names are the same as the C++ interface, except that destructive
+methods have a leading underscore.  Non-destructive equivalents are
+provided without the leading underscore.
 
 C<Algorithm::OpenFST> provides a convenient higher-level interface to
-OpenFST's basic operations.  Methods in this interface have lower_case
-names, while those in the raw library interface use StudlyCaps.
+OpenFST's basic operations.  Methods in this interface have
+C<lower_case> names, while those in the raw library interface use
+C<StudlyCaps>.
 
 =cut
 
 BEGIN {
-$VERSION = '0.01_03'
+$VERSION = '0.01_04'
 }
 require Exporter;
 use vars qw(@ISA @EXPORT_OK @EXPORT_TAGS);
@@ -52,18 +54,37 @@ universal
 );
 }
 
-=head2 C<$fsa = acceptor $file, %opts>
+=head2 Constructors
+
+=head3 C<$fst = VectorFST $smr>
+
+Create a mutable FST with semiring $smr.
+
+=head3 C<$fsa = acceptor $file, %opts>
 
 Create a finite-state acceptor from file $file with options %opts.
 
-=head2 C<$fst = transducer $file, %opts>
+=head3 C<$fst = transducer $file, %opts>
 
 Create a finite-state transducer from file $file with options %opts.
 
-=head2 C<$fst = from_list $init, $final, @edges>
+Options include:
 
-Create a transducer with initial state $init, final state $final, and
-edges @edges, where each edge is of the form [FROM, TO, IN, OUT, WEIGHT].
+=over 4
+
+=item B<is> -- Input symbol file.
+
+=item B<os> -- Output symbol file.
+
+=item B<ss> -- State symbol file.
+
+=item B<smr> -- Semiring name.
+
+=back
+
+=head3 C<$fst = ReadText $file, $smr, $acceptor, $is, $os, $ss>
+
+The low-level function implementing C<acceptor()> and C<transducer()>.
 
 =cut
 
@@ -81,6 +102,14 @@ sub transducer
     my %o = (smr => SMRLog, @_);
     return Algorithm::OpenFST::Transducer($file, @o{qw(smr is os ss)});
 }
+
+=head3 C<$fst = from_list $init, $final, \@symbols, @edges>
+
+Create a transducer with initial state $init, final state $final (or
+final states @$final), input and output alphabet @symbols, and edges
+@edges, where each edge is of the form [FROM, TO, IN, OUT, WEIGHT].
+
+=cut
 
 sub from_list
 {
@@ -109,10 +138,11 @@ sub from_list
     $ret;
 }
 
+=head3 C<$fst = universal $x>
 
-=head2 C<$fst = universal $max>
-
-Create a universal acceptor with output symbols 1..$max.
+Create a universal acceptor mapping symbols to epsilon.  If $x is a
+number, accept output symbols numbered 1..$max; if it is an array,
+accept symbols @$x; if it is an FST, accept all of its output symbols.
 
 =cut
 
@@ -135,15 +165,15 @@ sub universal
     $fst;
 }
 
-=head2 C<$fst = compose @fsts>
+=head3 C<$fst = compose @fsts>
 
 Compose transducers @fsts into a single transducer $fst.
 
-=head2 C<$fst = concat @fsts>
+=head3 C<$fst = concat @fsts>
 
 Concatenate transducers @fsts into a single transducer $fst.
 
-=head2 C<$fst = union @fsts>
+=head3 C<$fst = union @fsts>
 
 Union transducers @fsts into a single transducer $fst.
 
@@ -162,11 +192,7 @@ sub compose
         $ret = $ret->Compose($_);
     }
     $ret
-}# {
-#     my $ret = shift;
-#     $ret = $ret->Compose($_) for @_;
-#     $ret
-# }
+}
 
 sub concat
 {
@@ -200,19 +226,21 @@ sub '.$_.' {
 }
 }
 
-=head2 C<$fst-E<gt>in>
+=head2 Acessors and Mutators
 
-=head2 C<$fst-E<gt>out>
+=head3 C<$fst-E<gt>in>
 
-=head2 C<$fst-E<gt>ensure_state($n)>
+=head3 C<$fst-E<gt>out>
+
+=head3 C<$fst-E<gt>ensure_state($n)>
 
 Ensure that states up to $n exist in $fst.
 
-=head2 C<$fst-E<gt>add_state($n)>
+=head3 C<$fst-E<gt>add_state($n)>
 
 Add state $n (and previous states, if necessary).
 
-=head2 C<$fst-E<gt>add_arc($from, $to [, $in [, $out [, $wt]]])>
+=head3 C<$fst-E<gt>add_arc_safe($from, $to [, $in [, $out [, $wt]]])>
 
 Add an arc from $from to $to with input and output $in and $out, with
 weight $wt.
@@ -279,23 +307,13 @@ sub _syms
     sort { $a <=> $b } keys %h;
 }
 
-# sub in_syms
-# {
-#     shift->_syms(2);
-# }
-
-# sub out_syms
-# {
-#     shift->_syms(3);
-# }
-
-=head2 C<$ofst = $fst-E<gt>best_paths($n [, $unique])>
+=head3 C<$ofst = $fst-E<gt>best_paths($n [, $unique])>
 
 Compute the best $n paths through $fst.  Compute unique paths if
 $unique is true (UNIMPLEMENTED).  If $fst does not use the tropical
 semiring, it is directly converted to and from the tropical semiring.
 
-=head2 C<$ofst = $fst-E<gt>prune($w)>
+=head3 C<$ofst = $fst-E<gt>prune($w)>
 
 Prune $fst so paths worse than $w from the best path are removed.
 
@@ -334,6 +352,30 @@ sub prune
 1;
 __END__
 
+=head3 C<$fst-E<gt>normalize>
+
+=head3 C<@strings = $fst-E<gt>strings>
+
+=head3 C<@syms = $fstE<gt>in_syms>
+
+=head3 C<@syms = $fstE<gt>out_syms>
+
+=head1 BUGS AND TODO
+
+=over 4
+
+Many OpenFST functions will seg fault when given invalid input such as
+invalid state numbers.
+
+Other OpenFST functions will complain fatally when given an FST using
+the wrong semiring (e.g. C<Prune()>).
+
+There seem to be memory leaks in some operations, but since both Perl
+and OpenFST have their own garbage collection schemes, and OpenFST
+also performs some kind of caching, they are hard to track down.
+
+=back
+
 =head1 SEE ALSO
 
 OpenFST -- http://www.openfst.org/
@@ -346,8 +388,8 @@ Bug reports welcome, patches even more welcome.
 
 =head1 COPYRIGHT
 
-Copyright (C) 2007, Sean O'Rourke.  All rights reserved, some wrongs
-reversed.  This module is distributed under the same terms as Perl
-itself.
+Copyright (C) 2007, 2008, Sean O'Rourke.  All rights reserved, some
+wrongs reversed.  This module is distributed under the same terms as
+Perl itself.
 
 =cut

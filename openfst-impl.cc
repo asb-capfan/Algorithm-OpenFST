@@ -1,32 +1,17 @@
-#include <exception>
-#include <string>
-using namespace std;
-
-class fst_exception : public exception
-{
-    const string msg;
-public:
-    fst_exception(const string& _msg) throw ()
-	: msg(_msg) { }
-    ~fst_exception() throw ()
-	{ }
-    const char * what () const throw ()
-	{ return msg.c_str(); }
-};
-
-#include "openfst-pre.h"
 #include <sstream>
 #include <fstream>
-using namespace std;
-using namespace fst;
-
+#include "openfst-pre.h"
 #include "openfst.h"
 #include "openfst-io.h"
+#include "markovize.h"
+
+using namespace std;
+using namespace fst;
 
 //////////////////////////////////////////////////////////////////////
 // FST Impls
 template <typename Arc>
-struct FSTImpl : public FST
+struct FSTImpl : public FSTBase<Arc>
 {
     typedef fst::MutableFst<Arc> Fst;
 
@@ -50,31 +35,31 @@ struct FSTImpl : public FST
         : fst(f.fst->Copy()) { }
 
     virtual FST * Copy() const
-        {
-            FSTImpl * ret = new FSTImpl(*this);
-            ret->fst = fst->Copy();
-            return ret;
-        }
+        { return new FSTImpl(*this); }
 
     virtual int semiring() const;
 
     virtual FST * change_semiring(int smr) const;
     void copy_to(FST * fst) const;
+    virtual const fst::Fst<Arc> * get_fst() const
+        { return fst; }
+
     // Combination
     // XXX: why are only some destructive?
-    virtual FST * Compose(FST * that);
-    virtual FST * Intersect(FST * that);
+    virtual FST * Compose(FST * that) const;
+    virtual FST * Intersect(FST * that) const;
+    virtual FST * Difference(FST * that) const;
     virtual void _Union(const FST * that)
         {
-            const FSTImpl * f = dynamic_cast<const FSTImpl*>(that);
+            const FSTBase<Arc> * f = dynamic_cast<const FSTBase<Arc>*>(that);
             if (f)
-                fst::Union(fst, *f->fst);
+                fst::Union(fst, *f->get_fst());
         }
     virtual void _Concat(const FST * that)
         {
-            const FSTImpl * f = dynamic_cast<const FSTImpl*>(that);
+            const FSTBase<Arc> * f = dynamic_cast<const FSTBase<Arc>*>(that);
             if (f)
-                fst::Concat(fst, *f->fst);
+                fst::Concat(fst, *f->get_fst());
         }
 
     // Transformation
@@ -103,7 +88,9 @@ struct FSTImpl : public FST
                 RmEpsilonOptions<Arc, AutoQueue<typename Arc::StateId> >
                     opts(&queue, delta, true);
                 RmEpsilon(fst, &d, opts);
-            } catch (fst_exception e) { }
+            } catch (fst_exception e) {
+                croak("%s", e.what());
+            }
         }
     virtual FST * EpsNormalize(int ) const;
     virtual void _Minimize();
@@ -119,6 +106,7 @@ struct FSTImpl : public FST
             Push(fst, (fst::ReweightType)type);
         }
     virtual void normalize();
+    virtual FST * markovize(int ) const;
 
     virtual void AddState()
         { fst->AddState(); }
@@ -206,9 +194,8 @@ struct FSTImpl : public FST
                 fst::ShortestPath(*fst, ret->fst, n, uniq);
                 return ret;
             } catch (fst_exception e) {
-                cerr << e.what() << endl;
                 delete ret;
-                return NULL;
+                croak(e.what());
             }
         }
     void _strings(vector<string>& out, int st, const string& cur) const;
@@ -228,7 +215,7 @@ struct FSTImpl : public FST
 
 template <class Arc>
 FST *
-FSTImpl<Arc>::Intersect(FST * that)
+FSTImpl<Arc>::Intersect(FST * that) const
 {
     const FSTImpl * f = dynamic_cast<const FSTImpl<Arc>*>(that);
     if (f) {
@@ -248,13 +235,19 @@ FSTImpl<Arc>::Intersect(FST * that)
     return NULL;
 }
 
+#define CAST_OR_CROAK(Y, X, T) do {                             \
+        Y = dynamic_cast<T>(X);                                 \
+        if (!Y) {                                               \
+            croak("Argument %s not of type %s.", #X, #T);       \
+        }                                                       \
+    } while (0)
+
 template <class Arc>
 FST *
-FSTImpl<Arc>::Compose(FST * that)
+FSTImpl<Arc>::Compose(FST * that) const
 {
-    FSTImpl * f = dynamic_cast<FSTImpl<Arc>*>(that);
-    if (!f)
-        return NULL;
+    FSTImpl * f;
+    CAST_OR_CROAK(f, that, FSTImpl<Arc>*);
     if (!CompatSymbols(fst->OutputSymbols(), f->fst->InputSymbols())) {
         cerr << "incompatible symbol tables in Compose()" << endl;
         if (fst->OutputSymbols())
@@ -287,6 +280,25 @@ FSTImpl<Arc>::Compose(FST * that)
 
 template <class Arc>
 FST *
+FSTImpl<Arc>::Difference(FST * that) const
+{
+    FSTBase<Arc> * f;
+    CAST_OR_CROAK(f, that, FSTBase<Arc>*);
+    if (!get_fst()->Properties(kAcceptor, true)
+        || !f->get_fst()->Properties(kAcceptor, true))
+        return NULL;
+    VectorFst<Arc> * ret = new VectorFst<Arc>;
+    // Stupid library requires second FST to be unweighted.
+    ArcSortFst<Arc, ILabelCompare<Arc> > tmp(
+        MapFst<Arc, Arc, RmWeightMapper<Arc> >(
+            *f->get_fst(), RmWeightMapper<Arc>()),
+        ILabelCompare<Arc>());
+    fst::Difference(*get_fst(), tmp, ret);
+    return new FSTImpl<Arc>(ret);
+}
+
+template <class Arc>
+FST *
 FSTImpl<Arc>::Determinize(float del) const
 {
     // NOTE: we encode/decode here to make the FST functional
@@ -310,8 +322,7 @@ FSTImpl<Arc>::EpsNormalize(int type) const
         fst::EpsNormalize(*fst, ret->fst, (EpsNormalizeType)(type-1));
     } catch (fst_exception e) {
         delete ret;
-        cerr << "EpsNormalize failed." << endl;
-        return Copy();
+        croak("EpsNormalize failed.");
     }
     return ret;
 }
@@ -327,7 +338,9 @@ FSTImpl<Arc>::_Minimize()
         Encode(fst, &enc);
         fst::Minimize(fst);
         Decode(fst, enc);
-    } catch (fst_exception e) { }
+    } catch (fst_exception e) {
+        croak("%s", e.what());
+    }
 }
 
 template <class Arc>
@@ -345,7 +358,7 @@ FSTImpl<Arc>::Minimize() const
         return tmp;
     } catch (fst_exception e) {
         delete tmp;
-        return (FST *)this;
+        croak("%s", e.what());
     }
 }
 
@@ -523,6 +536,17 @@ FSTImpl<Arc>::normalize()
         a.weight = Divide(a.weight, w);
         ai.SetValue(a);
     }
+}
+
+template <class Arc>
+FST *
+FSTImpl<Arc>::markovize(int order) const
+{
+    VectorFst<Arc> * ret = new VectorFst<Arc>;
+    ret->SetInputSymbols(fst->InputSymbols());
+    ret->SetOutputSymbols(fst->OutputSymbols());
+    ::markovize(ret, *fst, order);
+    return new FSTImpl<Arc>(ret);
 }
 
 SV*

@@ -8,6 +8,9 @@ extern "C" {
 }
 
 #undef Copy
+#undef Zero
+#undef Move
+#include "openfst-pre.h"
 #include "openfst.h"
 #include "const-c.inc"
 
@@ -64,6 +67,10 @@ FST::Compose(fst)
 
 FST *
 FST::Intersect(fst)
+	FST *	fst
+
+FST *
+FST::Difference(fst)
 	FST *	fst
 
 void
@@ -169,6 +176,10 @@ FST::ShortestPath(n = 1, uniq = 0)
 
 void
 FST::normalize()
+
+FST *
+FST::markovize(n)
+	int	n
 
 FST *
 FST::change_semiring(smr)
